@@ -1,16 +1,29 @@
+import os
 import streamlit as st
 import pandas as pd
-import pickle
 import joblib
 
-# Load the trained model
-model = joblib.load('model_joblib.pkl') # Changed model filename and loading method
+# ---------------------------------------------------------
+# 1. Load Model dengan Path Relatif Aman
+# ---------------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, 'model_joblib.pkl')
 
-# Streamlit app title
+@st.cache_resource
+def load_model(path):
+    if not os.path.exists(path):
+        st.error(f"File model tidak ditemukan di: {path}. Pastikan file 'model_joblib.pkl' berada di folder yang sama dengan app.py!")
+        return None
+    return joblib.load(path)
+
+model = load_model(MODEL_PATH)
+
+# ---------------------------------------------------------
+# 2. Judul & Sidebar App
+# ---------------------------------------------------------
 st.title('Prediksi Tagihan Listrik Jakarta')
 st.write('Aplikasi untuk memprediksi jumlah tagihan listrik berdasarkan parameter yang diberikan.')
 
-# Sidebar for user inputs
 st.sidebar.header('Input Parameter')
 
 def user_input_features():
@@ -22,23 +35,24 @@ def user_input_features():
     tariff_class = st.sidebar.selectbox('Kelas Tarif', ['R1', 'R2', 'R3'])
 
     data = {
-        'kwh': kwh,
-        'ac_units': ac_units,
-        'ac_hours_per_day': ac_hours_per_day,
-        'family_size': family_size,
-        'month_name': month_name,
-        'tariff_class': tariff_class
+        'kwh': [kwh],
+        'ac_units': [ac_units],
+        'ac_hours_per_day': [ac_hours_per_day],
+        'family_size': [family_size],
+        'month_name': [month_name],
+        'tariff_class': [tariff_class]
     }
-    features = pd.DataFrame(data, index=[0])
-    return features
+    return pd.DataFrame(data)
 
 df_input = user_input_features()
 
 st.subheader('Parameter Input Pengguna:')
 st.write(df_input)
 
-# Define the exact columns and their dtypes expected by the model during training
-# This list ensures correct order and includes all dummy variables used during training
+# ---------------------------------------------------------
+# 3. Preprocessing Feature Encoding & Alignment
+# ---------------------------------------------------------
+# Urutan kolom & tipe data persis seperti yang digunakan saat pelatihan
 training_columns_and_dtypes = {
     'kwh': 'float64',
     'ac_units': 'int64',
@@ -59,38 +73,27 @@ training_columns_and_dtypes = {
     'tariff_class_R3': 'bool'
 }
 
-# Create an empty DataFrame with the correct columns and dtypes
-final_input_df = pd.DataFrame(columns=training_columns_and_dtypes.keys())
+# Terapkan One-Hot Encoding pada input pengguna
+encoded_input = pd.get_dummies(df_input, columns=['month_name', 'tariff_class'], drop_first=False)
+
+# Reindex agar urutan & keberadaan kolom persis sama dengan training_columns, lalu isi nilai kosong dengan False/0
+final_input_df = encoded_input.reindex(columns=training_columns_and_dtypes.keys(), fill_value=False)
+
+# Konversi tipe data sesuai tipe data training
 for col, dtype in training_columns_and_dtypes.items():
     final_input_df[col] = final_input_df[col].astype(dtype)
 
-# Add a single row of data, initially all zeros/False
-final_input_df.loc[0] = 0
-for col, dtype in training_columns_and_dtypes.items():
-    if dtype == 'bool':
-        final_input_df.loc[0, col] = False
-
-# Populate numerical features
-final_input_df.loc[0, 'kwh'] = df_input['kwh'][0]
-final_input_df.loc[0, 'ac_units'] = df_input['ac_units'][0]
-final_input_df.loc[0, 'ac_hours_per_day'] = df_input['ac_hours_per_day'][0]
-final_input_df.loc[0, 'family_size'] = df_input['family_size'][0]
-
-# Populate one-hot encoded categorical features
-selected_month_col = f"month_name_{df_input['month_name'][0]}"
-if selected_month_col in final_input_df.columns:
-    final_input_df.loc[0, selected_month_col] = True
-
-selected_tariff_col = f"tariff_class_{df_input['tariff_class'][0]}"
-if selected_tariff_col in final_input_df.columns:
-    final_input_df.loc[0, selected_tariff_col] = True
-
-# Make prediction
+# ---------------------------------------------------------
+# 4. Melakukan Prediksi
+# ---------------------------------------------------------
 if st.sidebar.button('Prediksi Tagihan'):
-    try:
-        prediction = model.predict(final_input_df) # Use the new DataFrame name
-        st.subheader('Hasil Prediksi Tagihan Listrik:')
-        st.write(f"Tagihan Diprediksi: Rp {prediction[0]:,.2f}")
-    except Exception as e:
-        st.error(f"Terjadi kesalahan saat melakukan prediksi: {e}")
-        st.exception(e) # Show full traceback
+    if model is None:
+        st.error("Model gagal di-load. Periksa ketersediaan file model_joblib.pkl di server/repository.")
+    else:
+        try:
+            prediction = model.predict(final_input_df)
+            st.subheader('Hasil Prediksi Tagihan Listrik:')
+            st.success(f"Tagihan Diprediksi: **Rp {prediction[0]:,.2f}**")
+        except Exception as e:
+            st.error(f"Terjadi kesalahan saat melakukan prediksi: {e}")
+            st.exception(e)
